@@ -43,43 +43,68 @@ class APICall(object):
             setattr(self, method, partial(request_wrapper, partial(request, method, url, headers=headers)))
 
 
-class APICaller(object):
-    api_url = ''
-    api_callers = []
+class AttributesHiderMetaClass(type):
+    def __new__(cls, name, bases, attrs):
+        hide_attrs_attr = '_hide_attrs'
+        hide_attrs = []
+        for basecls in bases:
+            hide_attrs.extend(getattr(basecls, hide_attrs_attr, []))
+        hide_attrs.extend(attrs.get(hide_attrs_attr, []))
+        attrs[hide_attrs_attr] = set(hide_attrs)
+        return type.__new__(cls, name, bases, attrs)
+
+
+class AttributesHider(object):
+    __metaclass__ = AttributesHiderMetaClass
+    def __new__(cls, *args, **kwargs):
+        hide_attrs = getattr(cls, '_hide_attrs', ())
+        for attr in hide_attrs:
+            if hasattr(cls, attr):
+                setattr(cls, '_%s' % attr, getattr(cls, attr))
+        return super(AttributesHider, cls).__new__(cls, *args, **kwargs)
+
+
+class APICaller(AttributesHider):
+    _hide_attrs = ('url', 'callers')
+
+    url = ''
+    callers = []
 
     def __init__(self, token, url):
         if url:
-            self.api_url = '%s%s' % (url, self.api_url)
-        self.token = token
-        self._call = APICall(self.token, self.api_url)
-        for cls in self.api_callers:
+            self._url = '%s%s' % (url, self._url)
+        self._token = token
+        self._call = APICall(self._token, self._url)
+        for cls in self._callers:
             setattr(self,
                 cls.__name__.lower(),
-                cls(token, self.api_url)
+                cls(token, self._url)
             )
 
 
-class APIRootCaller(APICaller):
+class APIRoot(APICaller):
     def __init__(self, token, url=''):
         if url:
-            self.api_url = url
-        super(APIRootCaller, self).__init__(token, '')
+            self._url = url
+        super(APIRoot, self).__init__(token, '')
 
 
-class APIDetail(APICaller):
-    api_lookup = 'id'
-    api_fields = []
+class APIObject(APICaller):
+    _hide_attrs = ('lookup', 'fields')
+
+    lookup = 'id'
+    fields = []
 
     def __init__(self, token, url, attrs):
-        lookup = attrs.get(self.api_lookup)
-        self.api_url = '%s/' % lookup
-        setattr(self, self.api_lookup, lookup)
+        lookup = attrs.get(self._lookup)
+        self._url = '%s/' % lookup
+        setattr(self, self._lookup, lookup)
         self._fill(attrs)
-        super(APIDetail, self).__init__(token, url)
+        super(APIObject, self).__init__(token, url)
 
     def _fill(self, attrs):
         for key, value in attrs.iteritems():
-            if key in self.api_fields:
+            if key in self._fields:
                 setattr(self, key, value)
 
     def _create(self):
@@ -96,33 +121,43 @@ class APIDetail(APICaller):
         self._call.delete()
 
     def __getattr__(self, name):
-        if name not in self.api_fields:
+        if name not in self._fields:
             raise AttributeError
         self._retrieve()
         return getattr(self, name)
 
+    def save(self):
+        #TODO save
+        pass
 
-class APIListCaller(APICaller):
-    api_detail = None
-    api_results_key = 'results'
-    api_count_key = 'count'
-    api_next_url_key = 'next'
+    def delete(self):
+        #TODO delete
+        pass
+
+
+class APIList(APICaller):
+    _hide_attrs = ('detail', 'results_key', 'count_key', 'next_url_key')
+
+    detail = None
+    results_key = 'results'
+    count_key = 'count'
+    next_url_key = 'next'
 
     def __init__(self, *args, **kwargs):
         self._count = None
-        super(APIListCaller, self).__init__(*args, **kwargs)
-        self._next_url = self.api_url
+        super(APIList, self).__init__(*args, **kwargs)
+        self._next_url = self._url
 
     def __iter__(self):
-        self._next_url = self.api_url
+        self._next_url = self._url
         self._results = []
         return self
 
     def _get(self):
-        status_code, response = APICall(self.token, self._next_url).get()
-        self._results = iter(response[self.api_results_key])
-        self._count = response[self.api_count_key]
-        self._next_url = response[self.api_next_url_key]
+        status_code, response = APICall(self._token, self._next_url).get()
+        self._results = iter(response[self._results_key])
+        self._count = response[self._count_key]
+        self._next_url = response[self._next_url_key]
 
     def next(self):
         if self._results:
@@ -140,8 +175,8 @@ class APIListCaller(APICaller):
 
     def _next_detail(self):
         results = next(self._results)
-        if self.api_detail:
-            return self.api_detail(self.token, self.api_url, results)
+        if self._detail:
+            return self._detail(self._token, self._url, results)
         else:
             return results
 
@@ -151,11 +186,16 @@ class APIListCaller(APICaller):
         return self._count
 
 
-class APIListDetailCaller(APIListCaller):
+class APIListDetail(APIList):
     def __init__(self, *args, **kwargs):
-        if self.api_detail is None:
-            raise APICallerException('Attribute api_detail have to be specified in class %s definition.' % self.__class__.__name__)
-        super(APIListDetailCaller, self).__init__(*args, **kwargs)
+        if self._detail is None:
+            raise APICallerException('Attribute detail have to be specified in class %s definition.' % self.__class__.__name__)
+        super(APIListDetail, self).__init__(*args, **kwargs)
 
-    def retrieve(self, **kwargs):
-        return self.api_detail(self.token, self.api_url, kwargs)
+    def get(self, **kwargs):
+        return self._detail(self._token, self._url, kwargs)
+
+    def add(self, **kwargs):
+        detail = self._detail(self._token, self._url, kwargs)
+        detail.save()
+        return detail
