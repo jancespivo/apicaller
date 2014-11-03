@@ -23,23 +23,23 @@ class APICallerException(Exception):
 class APICall(object):
     last_call = 0
 
-    def __init__(self, token, url):
+    def __init__(self, token, url, methods=()):
         headers = {
             'content-type': 'application/json',
             'Authorization': 'Token %s' % token
         }
 
-        def request_wrapper(func, *args, **kwargs):
+        def request_wrapper(func, data):
             #wait between api calls
             sleep(max(0, self.__class__.last_call + API_CALLS_WAITING_TIME - time()))
-            response = func(*args, **kwargs)
+            response = func(data=json.dumps(data))
             self.__class__.last_call = time()
             if response.status_code >= 200 and response.status_code < 300:
                 return response.status_code, response.json()
             else:
                 raise APICallException(response.status_code, response.json())
 
-        for method in ('get', 'post', 'put', 'delete', 'patch'):
+        for method in ('get', 'post', 'put', 'delete', 'patch').intersection(methods):
             setattr(self, method, partial(request_wrapper, partial(request, method, url, headers=headers)))
 
 
@@ -65,16 +65,17 @@ class AttributesHider(object):
 
 
 class APICaller(AttributesHider):
-    _hide_attrs = ('url', 'callers')
+    _hide_attrs = ('url', 'callers', 'methods')
 
     url = ''
     callers = []
+    methods = []
 
     def __init__(self, token, url):
         if url:
             self._url = '%s%s' % (url, self._url)
         self._token = token
-        self._call = APICall(self._token, self._url)
+        self._call = APICall(self._token, self._url, self._methods)
         for cls in self._callers:
             setattr(self,
                 cls.__name__.lower(),
