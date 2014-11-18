@@ -1,4 +1,3 @@
-import json
 from requests import request
 from functools import partial
 from time import time, sleep
@@ -23,24 +22,24 @@ class APICallerException(Exception):
 class APICall(object):
     last_call = 0
 
-    def __init__(self, token, url, methods=()):
+    def __init__(self, token, url, json=True):
         headers = {
-            'content-type': 'application/json',
             'Authorization': 'Token %s' % token
         }
 
-        def request_wrapper(func, data):
+        def request_wrapper(func, data={}):
             #wait between api calls
             sleep(max(0, self.__class__.last_call + API_CALLS_WAITING_TIME - time()))
-            response = func(data=json.dumps(data))
+            response = func(data=data)
+
             self.__class__.last_call = time()
-            if response.status_code >= 200 and response.status_code < 300:
-                return response.status_code, response.json()
+            if 200 <= response.status_code < 300:
+                return response.status_code, response.json() if json else response
             else:
                 raise APICallException(response.status_code, response.json())
 
-        for method in ('get', 'post', 'put', 'delete', 'patch').intersection(methods):
-            setattr(self, method, partial(request_wrapper, partial(request, method, url, headers=headers)))
+        for method in ('get', 'post', 'put', 'delete', 'patch'):
+            setattr(self, method, partial(request_wrapper, partial(request, method, url, headers=headers, json=json)))
 
 
 class AttributesHiderMetaClass(type):
@@ -56,6 +55,7 @@ class AttributesHiderMetaClass(type):
 
 class AttributesHider(object):
     __metaclass__ = AttributesHiderMetaClass
+
     def __new__(cls, *args, **kwargs):
         hide_attrs = getattr(cls, '_hide_attrs', ())
         for attr in hide_attrs:
@@ -65,20 +65,21 @@ class AttributesHider(object):
 
 
 class APICaller(AttributesHider):
-    _hide_attrs = ('url', 'callers', 'methods')
+    _hide_attrs = ('url', 'callers', 'name')
 
     url = ''
     callers = []
-    methods = []
+    name = ''
 
     def __init__(self, token, url):
         if url:
             self._url = '%s%s' % (url, self._url)
         self._token = token
-        self._call = APICall(self._token, self._url, self._methods)
+        self._call = APICall(self._token, self._url)
         for cls in self._callers:
-            setattr(self,
-                cls.__name__.lower(),
+            setattr(
+                self,
+                cls.name or cls.__name__.lower(),
                 cls(token, self._url)
             )
 
