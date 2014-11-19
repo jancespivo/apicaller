@@ -7,19 +7,29 @@ API_CALLS_WAITING_TIME = 0.05
 
 
 class APICallException(Exception):
-    def __init__(self, status_code, *args, **kwargs):
-        self.status_code = status_code
+    def __init__(self, response, *args, **kwargs):
+        self.response = response
         super(APICallException, self).__init__(*args, **kwargs)
 
+    def get_response_data(self):
+        try:
+            return self.response.json()
+        except Exception:
+            return self.response.text
+
     def __str__(self):
-        return '%s - %s' % (self.status_code, super(APICallException, self).__str__())
+        return '%s - %s' % (self.response.status_code, len(self.response.content))
 
 
 class APICallerException(Exception):
+    #TODO avoid, replace this
     pass
 
 
 class APICall(object):
+    """
+    abstraction to http calls
+    """
     last_call = 0
 
     def __init__(self, token, url, json=True):
@@ -30,19 +40,40 @@ class APICall(object):
         def request_wrapper(func, data={}):
             #wait between api calls
             sleep(max(0, self.__class__.last_call + API_CALLS_WAITING_TIME - time()))
-            response = func(data=data)
+            kwargs = {}
+            if json:
+                kwargs['json'] = data
+            else:
+                kwargs['data'] = data
+            response = func(**kwargs)
 
             self.__class__.last_call = time()
-            if 200 <= response.status_code < 300:
-                return response.status_code, response.json() if json else response
+
+            if json:
+                try:
+                    response_data = response.json()
+                except Exception:
+                    raise APICallException(response)
             else:
-                raise APICallException(response.status_code, response.json())
+                response_data = response.text
+
+            if 200 <= response.status_code < 300:
+                return response.status_code, response_data
+            else:
+                raise APICallException(response)
 
         for method in ('get', 'post', 'put', 'delete', 'patch'):
-            setattr(self, method, partial(request_wrapper, partial(request, method, url, headers=headers, json=json)))
+            setattr(
+                self,
+                method,
+                partial(request_wrapper, partial(request, method, url, headers=headers))
+            )
 
 
 class AttributesHiderMetaClass(type):
+    """
+    gather _hide_attrs class attribute from all bases
+    """
     def __new__(cls, name, bases, attrs):
         hide_attrs_attr = '_hide_attrs'
         hide_attrs = []
@@ -54,6 +85,9 @@ class AttributesHiderMetaClass(type):
 
 
 class AttributesHider(object):
+    """
+    perform the hiding of attributes (actually protect them with _)
+    """
     __metaclass__ = AttributesHiderMetaClass
 
     def __new__(cls, *args, **kwargs):
@@ -64,11 +98,14 @@ class AttributesHider(object):
         return super(AttributesHider, cls).__new__(cls, *args, **kwargs)
 
 
-class APICaller(AttributesHider):
-    _hide_attrs = ('url', 'callers', 'name')
+class APINode(AttributesHider):
+    """
+    generic api url and nodes holder
+    """
+    _hide_attrs = ('url', 'nodes', 'name')
 
     url = ''
-    callers = []
+    nodes = []
     name = ''
 
     def __init__(self, token, url):
@@ -76,7 +113,7 @@ class APICaller(AttributesHider):
             self._url = '%s%s' % (url, self._url)
         self._token = token
         self._call = APICall(self._token, self._url)
-        for cls in self._callers:
+        for cls in self._nodes:
             setattr(
                 self,
                 cls.name or cls.__name__.lower(),
@@ -84,14 +121,14 @@ class APICaller(AttributesHider):
             )
 
 
-class APIRoot(APICaller):
+class APIRoot(APINode):
     def __init__(self, token, url=''):
         if url:
             self._url = url
         super(APIRoot, self).__init__(token, '')
 
 
-class APIObject(APICaller):
+class APIObject(APINode):
     _hide_attrs = ('lookup', 'fields')
 
     lookup = 'id'
@@ -137,7 +174,7 @@ class APIObject(APICaller):
         pass
 
 
-class APIList(APICaller):
+class APIList(APINode):
     _hide_attrs = ('detail', 'results_key', 'count_key', 'next_url_key')
 
     detail = None
