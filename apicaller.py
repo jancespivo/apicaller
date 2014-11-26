@@ -32,19 +32,22 @@ class APICall(object):
     """
     last_call = 0
 
-    def __init__(self, token, url, json=True):
-        headers = {
-            'Authorization': 'Token %s' % token
-        }
+    def __init__(self, url, token='', json=True, verify_ssl=True):
+        headers = {}
+        if token:
+            headers.update({
+                'Authorization': 'Token %s' % token
+            })
 
         def request_wrapper(func, data={}):
             #wait between api calls
             sleep(max(0, self.__class__.last_call + API_CALLS_WAITING_TIME - time()))
             kwargs = {}
-            if json:
-                kwargs['json'] = data
-            else:
-                kwargs['data'] = data
+            if data:
+                if json:
+                    kwargs['json'] = data
+                else:
+                    kwargs['data'] = data
             response = func(**kwargs)
 
             self.__class__.last_call = time()
@@ -66,7 +69,7 @@ class APICall(object):
             setattr(
                 self,
                 method,
-                partial(request_wrapper, partial(request, method, url, headers=headers))
+                partial(request_wrapper, partial(request, method, url, headers=headers, verify=verify_ssl))
             )
 
 
@@ -108,24 +111,24 @@ class APINode(AttributesHider):
     nodes = []
     name = ''
 
-    def __init__(self, token, url):
+    def __init__(self, url, token='', json=True, verify_ssl=True):
         if url:
             self._url = '%s%s' % (url, self._url)
-        self._token = token
-        self._call = APICall(self._token, self._url)
+
+        self._call = APICall(self._url, token=token, json=json, verify_ssl=verify_ssl)
         for cls in self._nodes:
             setattr(
                 self,
                 cls.name or cls.__name__.lower(),
-                cls(token, self._url)
+                cls(self._url, token=token, json=json, verify_ssl=verify_ssl)
             )
 
 
 class APIRoot(APINode):
-    def __init__(self, token, url=''):
+    def __init__(self, url, **kwargs):
         if url:
             self._url = url
-        super(APIRoot, self).__init__(token, '')
+        super(APIRoot, self).__init__('', **kwargs)
 
 
 class APIObject(APINode):
@@ -134,12 +137,12 @@ class APIObject(APINode):
     lookup = 'id'
     fields = []
 
-    def __init__(self, token, url, attrs):
+    def __init__(self, url, attrs, **kwargs):
         lookup = attrs.get(self._lookup)
         self._url = '%s/' % lookup
         setattr(self, self._lookup, lookup)
         self._fill(attrs)
-        super(APIObject, self).__init__(token, url)
+        super(APIObject, self).__init__(url, **kwargs)
 
     def _fill(self, attrs):
         for key, value in attrs.iteritems():
@@ -182,9 +185,10 @@ class APIList(APINode):
     count_key = 'count'
     next_url_key = 'next'
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, url, **kwargs):
         self._count = None
-        super(APIList, self).__init__(*args, **kwargs)
+        super(APIList, self).__init__(url, **kwargs)
+        self._kwargs = kwargs
         self._next_url = self._url
 
     def __iter__(self):
@@ -193,7 +197,7 @@ class APIList(APINode):
         return self
 
     def _get(self):
-        status_code, response = APICall(self._token, self._next_url).get()
+        status_code, response = APICall(self._next_url, **self._kwargs).get()
         self._results = iter(response[self._results_key])
         self._count = response[self._count_key]
         self._next_url = response[self._next_url_key]
@@ -215,7 +219,7 @@ class APIList(APINode):
     def _next_detail(self):
         results = next(self._results)
         if self._detail:
-            return self._detail(self._token, self._url, results)
+            return self._detail(self._url, results, **self._kwargs)
         else:
             return results
 
@@ -226,15 +230,15 @@ class APIList(APINode):
 
 
 class APIListDetail(APIList):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, url, **kwargs):
         if self._detail is None:
             raise APICallerException('Attribute detail have to be specified in class %s definition.' % self.__class__.__name__)
-        super(APIListDetail, self).__init__(*args, **kwargs)
+        super(APIListDetail, self).__init__(url, **kwargs)
 
     def get(self, **kwargs):
-        return self._detail(self._token, self._url, kwargs)
+        return self._detail(self._url, **self._kwargs)
 
     def add(self, **kwargs):
-        detail = self._detail(self._token, self._url, kwargs)
+        detail = self._detail(self._url, **self._kwargs)
         detail.save()
         return detail

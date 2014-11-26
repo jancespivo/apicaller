@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from setuptools import setup, find_packages
+from setuptools import setup
 
 NAME = "apicaller"
 DESCRIPTION = "APICaller makes the creating API client library easier."
