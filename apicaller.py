@@ -1,7 +1,7 @@
 from requests import request
 from functools import partial
 from time import time, sleep
-
+from collections import namedtuple
 
 API_CALLS_WAITING_TIME = 0.05
 
@@ -21,6 +21,9 @@ class APICallException(Exception):
         return '%s - %s' % (self.response.status_code, len(self.response.content))
 
 
+APICallResponse = namedtuple('APICallResponse', ['data', 'status', 'headers'])
+
+
 class APICallerException(Exception):
     #TODO avoid, replace this
     pass
@@ -32,12 +35,17 @@ class APICall(object):
     """
     last_call = 0
 
-    def __init__(self, url, token='', json=True, verify_ssl=True):
+    def __init__(self, url, token='', json=True, verify_ssl=True, auth=None):
         headers = {}
-        if token:
-            headers.update({
-                'Authorization': 'Token %s' % token
-            })
+
+        #authentication
+        if isinstance(auth, dict):
+            token = auth.get('token', '')
+            if token:
+                headers.update({
+                    'Authorization': 'Token %s' % token
+                })
+                auth = None
 
         def request_wrapper(func, data={}):
             #wait between api calls
@@ -61,7 +69,7 @@ class APICall(object):
                 response_data = response.text
 
             if 200 <= response.status_code < 300:
-                return response.status_code, response_data
+                return APICallResponse(data=response_data, status=response.status_code, headers=response.headers)
             else:
                 raise APICallException(response)
 
@@ -69,7 +77,7 @@ class APICall(object):
             setattr(
                 self,
                 method,
-                partial(request_wrapper, partial(request, method, url, headers=headers, verify=verify_ssl))
+                partial(request_wrapper, partial(request, method, url, headers=headers, verify=verify_ssl, auth=auth))
             )
 
 
@@ -111,24 +119,24 @@ class APINode(AttributesHider):
     nodes = []
     name = ''
 
-    def __init__(self, url, token='', json=True, verify_ssl=True):
+    def __init__(self, url='', json=True, verify_ssl=True, auth=None):
         if url:
             self._url = '%s%s' % (url, self._url)
 
-        self._call = APICall(self._url, token=token, json=json, verify_ssl=verify_ssl)
+        self._call = APICall(self._url, json=json, verify_ssl=verify_ssl, auth=auth)
         for cls in self._nodes:
             setattr(
                 self,
                 cls.name or cls.__name__.lower(),
-                cls(self._url, token=token, json=json, verify_ssl=verify_ssl)
+                cls(self._url, json=json, verify_ssl=verify_ssl, auth=auth)
             )
 
 
 class APIRoot(APINode):
-    def __init__(self, url, **kwargs):
+    def __init__(self, url='', **kwargs):
         if url:
             self._url = url
-        super(APIRoot, self).__init__('', **kwargs)
+        super(APIRoot, self).__init__(**kwargs)
 
 
 class APIObject(APINode):
@@ -197,10 +205,16 @@ class APIList(APINode):
         return self
 
     def _get(self):
-        status_code, response = APICall(self._next_url, **self._kwargs).get()
-        self._results = iter(response[self._results_key])
-        self._count = response[self._count_key]
-        self._next_url = response[self._next_url_key]
+        response = APICall(self._next_url, **self._kwargs).get()
+        if isinstance(response.data, dict):
+            #TODO FIXME
+            self._results = iter(response.data[self._results_key])
+            self._count = response.data[self._count_key]
+            self._next_url = response.data[self._next_url_key]
+        else:
+            self._results = response.data
+            self._count = len(self._results)
+
 
     def next(self):
         if self._results:
@@ -232,7 +246,7 @@ class APIList(APINode):
 class APIListDetail(APIList):
     def __init__(self, url, **kwargs):
         if self._detail is None:
-            raise APICallerException('Attribute detail have to be specified in class %s definition.' % self.__class__.__name__)
+            raise APICallerException('Attribute detail must be specified in class %s definition.' % self.__class__.__name__)
         super(APIListDetail, self).__init__(url, **kwargs)
 
     def get(self, **kwargs):
