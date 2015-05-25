@@ -6,7 +6,8 @@ DESCRIPTION = "APICaller makes the creating API client library easier."
 AUTHOR = "Jan Češpivo"
 AUTHOR_EMAIL = "jan.cespivo@gmail.com"
 URL = "https://github.com/cespivo/apicaller"
-VERSION = '0.1.0a'
+VERSION = '0.1.2a'
+
 
 setup(
     name=NAME,
